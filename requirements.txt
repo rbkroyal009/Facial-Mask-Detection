@@ -1,8 +1,7 @@
 streamlit
-pillow
-numpy
+tensorflow
+keras
 opencv-python
-tensorflow>=2.6
-scikit-learn
-matplotlib
-imutils
+numpy
+pillow
+requests
