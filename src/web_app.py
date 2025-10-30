@@ -1,24 +1,23 @@
 import streamlit as st
+import tensorflow as tf
 import cv2
 import numpy as np
-import tensorflow as tf
-import os
 import requests
-import zipfile
+import os
 from PIL import Image
 
 # ==============================
 # CONFIGURATION
 # ==============================
-MODEL_FILE_ID = "1Sqb6-kuClpMYhxbFas_PeobTaflw3-Sz"  # your Google Drive ID
-MODEL_DIR = "models"
-MODEL_PATH = os.path.join(MODEL_DIR, "mask_detector.h5")
+MODEL_URL = "https://huggingface.co/rbkroyal/facial-mask-model/resolve/main/mask_detector.h5"
+MODEL_PATH = "models/mask_detector.h5"
 CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
 # ==============================
 # PAGE STYLE
 # ==============================
 st.set_page_config(page_title="😷 Face Mask Detection", page_icon="🧠", layout="wide")
+
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] {
@@ -36,51 +35,30 @@ st.markdown("""
 .stButton>button:hover {
   transform: scale(1.05);
 }
-.main-title {text-align:center;font-size:2.3em;color:#222;font-weight:800;}
+.main-title {
+  text-align:center;
+  font-size:2.3em;
+  color:#222;
+  font-weight:800;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================
-# DOWNLOAD FROM GOOGLE DRIVE
-# ==============================
-def download_from_google_drive(file_id, destination):
-    """Download large file from Google Drive and handle zip/unzip if needed."""
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    url = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-    response = session.get(url, params={"id": file_id}, stream=True)
-    token = None
-    for k, v in response.cookies.items():
-        if k.startswith("download_warning"):
-            token = v
-    if token:
-        response = session.get(url, params={"id": file_id, "confirm": token}, stream=True)
-
-    # Detect if returned HTML instead of binary
-    if "text/html" in response.headers.get("Content-Type", ""):
-        st.error("❌ Google Drive returned an HTML page — file might be private or too large.")
-        st.stop()
-
-    tmp_path = destination
-    with open(tmp_path, "wb") as f:
-        for chunk in response.iter_content(32768):
-            if chunk:
-                f.write(chunk)
-
-    # If zip, unzip
-    if zipfile.is_zipfile(tmp_path):
-        with zipfile.ZipFile(tmp_path, "r") as zip_ref:
-            zip_ref.extractall(MODEL_DIR)
-        os.remove(tmp_path)
-
-# ==============================
-# LOAD MODEL
+# DOWNLOAD AND LOAD MODEL
 # ==============================
 @st.cache_resource
 def load_model():
+    """Download and load the model from Hugging Face if not cached."""
+    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
     if not os.path.exists(MODEL_PATH):
-        st.info("📥 Downloading model from Google Drive...")
-        download_from_google_drive(MODEL_FILE_ID, MODEL_PATH)
+        st.info("📥 Downloading model from Hugging Face...")
+        r = requests.get(MODEL_URL)
+        if r.status_code != 200:
+            st.error("❌ Failed to download model. Check Hugging Face link.")
+            st.stop()
+        with open(MODEL_PATH, "wb") as f:
+            f.write(r.content)
     try:
         model = tf.keras.models.load_model(MODEL_PATH)
         st.success("✅ Model loaded successfully!")
@@ -95,17 +73,23 @@ def load_model():
 def detect_mask(image, model):
     face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+
     for (x, y, w, h) in faces:
         face = image[y:y+h, x:x+w]
         face = cv2.resize(face, (224, 224))
-        face = face / 255.0
-        face = np.expand_dims(face, axis=0)
+        face = np.expand_dims(face / 255.0, axis=0)
         pred = model.predict(face, verbose=0)[0][0]
+
         if pred < 0.5:
-            label, color, conf = "😷 Mask", (0, 255, 0), f"{(1-pred)*100:.1f}%"
+            label = "😷 Mask"
+            color = (0, 255, 0)
+            conf = f"{(1 - pred) * 100:.1f}%"
         else:
-            label, color, conf = "❌ No Mask", (255, 0, 0), f"{pred*100:.1f}%"
+            label = "❌ No Mask"
+            color = (255, 0, 0)
+            conf = f"{pred * 100:.1f}%"
+
         cv2.putText(image, f"{label} ({conf})", (x, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
         cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
